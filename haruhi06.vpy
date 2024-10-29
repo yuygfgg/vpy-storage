@@ -445,7 +445,7 @@ def aa_oped(clip):
            aarepair=0, postaa=None, src=None, stabilize=3, down8=False, showmask=0, opencl=True)
     return aa_clip
 
-def dnchroma_stabv(clip):
+def chroma_aa(clip):
     configure.clean = True
     clip = core.placebo.Shader(clip=clip, shader_s=jointBilateral).resize.Bicubic(format=vs.YUV420P16)
     clip = core.placebo.Shader(clip=clip, shader_s=cfl).resize.Bicubic(format=vs.YUV420P16)
@@ -479,7 +479,7 @@ def p_oped(clip):
     return merged1080P
 
 def p_body(clip):
-    merged_YUV = dnchroma_stabv(clip)
+    merged_YUV = chroma_aa(clip)
     denoised1080P = denoise(merged_YUV)
     nrmask = ksksfunc.DBMask(denoised1080P)
     dbed1080P = deband(denoised1080P)
@@ -506,13 +506,12 @@ def main():
     fin = before_op + op + body + ed
     
     fin = adptvgrnMod.adptvgrnMod(clip_in=fin, strength=1)
-
-    fin.set_output(0)
-    # must align frames with vcb!
-    eg.set_output(1)
-    src16.set_output(2)
-
+    
     if configure.clean:
         cleanup()
+    
+    fin.set_output(0)
+    eg.set_output(1)
+    src16.set_output(2)
 
 main()
