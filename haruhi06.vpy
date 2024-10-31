@@ -377,8 +377,7 @@ from vapoursynth import core
 import mvsfunc as mvf
 import havsfunc as haf
 import vsTAAmbk as taa
-import rksfunc, ksksfunc, vsmlrt, vsutil, fvsfunc, adptvgrnMod
-from nnedi3_resample import nnedi3_resample
+import rksfunc, ksksfunc, vsmlrt, vsutil, adptvgrnMod, nnedi3_resample, Vine
 
 class cfg:
 
@@ -394,10 +393,14 @@ def load_source(filepath):
     if configure.width == 0 or configure.height == 0:
         configure.width = clip.width
         configure.height = clip.height
-    clip = core.resize.Bicubic(clip=clip, width=configure.width, height=configure.height, format=vs.YUV420P16, matrix_s="709", matrix_in_s="709")
+    clip = core.fmtc.bitdepth(clip=clip, bits=16)
+    clip = rksfunc.KrigBilateral(c420p16=clip)
+    clip = core.placebo.Shader(clip=clip, shader_s=cfl)
+    clip = core.placebo.Shader(clip=clip, shader_s=jointBilateral)
+    clip = core.resize.Spline36(clip=clip, width=configure.width, height=configure.height, format=vs.YUV420P16, matrix_s="709", matrix_in_s="709")
     return clip
 
-def dehalo_mask(clip):
+def dehalo_mask_main(clip: vs.VideoNode):
     luma = vsutil.get_y(clip)
     l_mask = haf.FineDehalo(luma, showmask=4)
     mask_outer = l_mask.std.Maximum().std.Maximum().std.Inflate()
@@ -406,24 +409,24 @@ def dehalo_mask(clip):
     mask_inner = core.akarin.Expr([mask_inner1, luma], "y 20000 < x 0 > and x 0 ?") # ((y < 20000) and (x > 0)) ? x : 0
     r_mask1 = core.akarin.Expr([mask_outer2, mask_inner], 'x y -')
     r_mask = core.akarin.Expr([r_mask1, luma], "y 20000 < x 0 > and 0 x ?") # ((y < 20000) and (x > 0)) ? 0 : x
-    r_mask_highres = nnedi3_resample(input=r_mask, target_width=1920*2, target_height=1080*2, mode="nnedi3cl")
+    r_mask_highres = nnedi3_resample.nnedi3_resample(input=r_mask, target_width=clip.width*2, target_height=clip.height*2, mode="nnedi3cl")
     r_mask_min = core.std.Minimum(clip=r_mask_highres)
-    r_mask_back = core.resize.Spline36(clip=r_mask_min, width=1920 ,height=1080)
+    r_mask_back = core.resize.Spline36(clip=r_mask_min, width=clip.width ,height=clip.height)
     return r_mask_back
 
 def dehalo(clip):
-    clip = core.resize.Bicubic(clip=clip, format=vs.YUV444P16)
-    clip720P = core.resize.Spline36(clip=clip, width=1280, height=720, format=vs.YUV444P16)
-    dering1 = rksfunc.USMDering(cyuv16=clip720P, mrad=1, mthr=75)
-    dering2 = haf.FineDehalo(src=dering1, contra=1)
-    dering3 = haf.DeHalo_alpha(clp=dering2, rx=2, ry=2, darkstr=0.6)
+    clipY = vsutil.get_y(clip)
+    clipY720P = core.resize.Spline36(clip=clipY, width=1280, height=720, format=vs.GRAY16)
+    mask720 = dehalo_mask_main(clipY720P)
+    dering1 = rksfunc.USMDering(cyuv16=clipY720P, mrad=1, mthr=75)
+    dering2 = haf.FineDehalo(src=dering1, contra=1, edgeproc=1, darkstr=0.5)
+    dering3 = haf.DeHalo_alpha(clp=dering2, rx=1.4, ry=1.4, darkstr=0.5)
+    dering3 = core.std.MaskedMerge(clipY720P, dering3, mask720, first_plane=True)
     dering4 = haf.EdgeCleaner(c=dering3, strength=10)
-    back = nnedi3_resample(input=dering4, target_height=1080, target_width=1920, mode="nnedi3cl")
-    # back = dering3
-    mask = dehalo_mask(clip)
-    mask.set_output(3)
-    merge_back = core.std.MaskedMerge(clip, back, mask, first_plane=True).resize.Bicubic(format=vs.YUV420P16)
-    return merge_back
+    dering4 = core.std.MaskedMerge(clipY720P, dering4, mask720, first_plane=True)
+    backY = nnedi3_resample.nnedi3_resample(input=dering4, target_width=1920, target_height=1080, mode="nnedi3cl")
+    ret = rksfunc.mergeuv(clipy=backY, clipuv=clip)
+    return ret
 
 def denoise(clip):
     denoised = rksfunc.Fast_BM3DWrapper(c420p16=clip)
@@ -434,7 +437,7 @@ def deband(clip):
     return debanded
 
 def aa(clip):
-    aa_clip = taa.TAAmbk(clip, aatype=2, aatypeu=0, aatypev=0, preaa=-1, strength=0.45, cycle=1, mtype=3, mclip=None,
+    aa_clip = taa.TAAmbk(clip, aatype=2, aatypeu=1, aatypev=1, preaa=-1, strength=0.45, cycle=1, mtype=3, mclip=None,
            mthr=None, mthr2=None, mlthresh=None, mpand=(1, 0), txtmask=0, txtfade=0, thin=0, dark=0.0, sharp=-1,
            aarepair=0, postaa=None, src=None, stabilize=3, down8=False, showmask=0, opencl=True)
     return aa_clip
@@ -445,25 +448,22 @@ def aa_oped(clip):
            aarepair=0, postaa=None, src=None, stabilize=3, down8=False, showmask=0, opencl=True)
     return aa_clip
 
-def chroma_aa(clip):
+def chroma_aa(clip: vs.VideoNode) -> vs.VideoNode: 
     configure.clean = True
     clip = core.placebo.Shader(clip=clip, shader_s=jointBilateral).resize.Bicubic(format=vs.YUV420P16)
     clip = core.placebo.Shader(clip=clip, shader_s=cfl).resize.Bicubic(format=vs.YUV420P16)
     half = rksfunc.half444(clip)
     y, u, v = vsutil.split(half)
-    v_stab = haf.QTGMC(v, InputType=1, SourceMatch=3, Sharpness=0, opencl=True) # type: ignore
-    v_stab = haf.QTGMC(v_stab.std.Transpose(), InputType=1, SourceMatch=3, Sharpness=0, opencl=True).std.Transpose() # type: ignore
-    u_stab = haf.QTGMC(u, InputType=1, SourceMatch=3, Sharpness=0, opencl=True) # type: ignore
-    u_stab = haf.QTGMC(u_stab.std.Transpose(), InputType=1, SourceMatch=3, Sharpness=0, opencl=True).std.Transpose() # type: ignore
-    half_stab = vsutil.join([y, u_stab, v_stab]).fmtc.bitdepth(bits=32)
+    v_stab = haf.QTGMC(v, InputType=1, SourceMatch=3, Sharpness=0, opencl=True)
+    v_stab = haf.QTGMC(v_stab.std.Transpose(), InputType=1, SourceMatch=3, Sharpness=0, opencl=True).std.Transpose()
+    u_stab = haf.QTGMC(u, InputType=1, SourceMatch=3, Sharpness=0, opencl=True)
+    u_stab = haf.QTGMC(u_stab.std.Transpose(), InputType=1, SourceMatch=3, Sharpness=0, opencl=True).std.Transpose()
+    half_stab = vsutil.join([y, u_stab, v_stab]).placebo.Shader(shader_s=cfl).resize.Bicubic(format=vs.YUV444P16)
     half_w2x = rksfunc.w2xtrt(half_stab, 3, ofmt=True)
-    # duv = half_stab.bm3dcpu.BM3Dv2(ref=half_w2x, sigma=2, block_step=6, bm_range=8, radius=0, ps_num=2, ps_range=4)
-    ret = rksfunc.mergeuv(clip, half_w2x.fmtc.bitdepth(bits=16))
+    ret = rksfunc.mergeuv(clip, half_w2x.resize.Bicubic(format=vs.YUV444P16))
     ret = core.placebo.Shader(clip=ret, shader_s=cfl).resize.Bicubic(format=vs.YUV420P16)
     line_mask = taa.TAAmbk(clip=clip, aatype=1, aatypeu=0, aatypev=0, opencl=True, showmask=1, mthr=56, strength=0).std.Maximum()
     merge = core.std.MaskedMerge(clip, ret, line_mask, first_plane=True).placebo.Shader(shader_s=cfl).resize.Bicubic(format=vs.YUV420P16)
-    _, _, v_p = vsutil.split(merge)
-    v_p.set_output(4)
     return merge
 
 def cleanup():
@@ -480,6 +480,7 @@ def p_oped(clip):
 
 def p_body(clip):
     merged_YUV = chroma_aa(clip)
+    # merged_YUV = dehalo(merged_YUV)
     denoised1080P = denoise(merged_YUV)
     nrmask = ksksfunc.DBMask(denoised1080P)
     dbed1080P = deband(denoised1080P)
@@ -487,7 +488,7 @@ def p_body(clip):
     merged1080P = core.std.MaskedMerge(dbed1080P,aaed1080P,nrmask,first_plane=True) # type: ignore
     dehalod = dehalo(merged1080P)
 
-    sharp = core.warp.AWarpSharp2(dehalod, thresh=128,blur=3,type=1,depth=[1, 0, 0],chroma=1,cplace="mpeg2", opt=True)
+    sharp = core.warp.AWarpSharp2(dehalod, thresh=128,blur=3,type=1,depth=[1, 0, 0],chroma=1,cplace="mpeg2", opt=True).placebo.Shader(shader_s=cfl).resize.Bicubic(format=vs.YUV420P16)
         
     return sharp
 
@@ -495,7 +496,7 @@ def main():
 
     eg = core.lsmas.LWLibavSource(f'/Volumes/untitled/S01E{configure.episode}_vcb.mkv')
     src16 = load_source(f'/Volumes/untitled/S01E{configure.episode}.mkv').std.Trim(first=24)
-
+    # src16 = load_source('/Users/a1/00000.m2ts')
     body_part = p_body(src16)
     oped = p_oped(src16)
 
@@ -505,7 +506,11 @@ def main():
     body = body_part.std.Trim(first=5756, last=33975)
     fin = before_op + op + body + ed
     
-    fin = adptvgrnMod.adptvgrnMod(clip_in=fin, strength=1)
+    fin = adptvgrnMod.adptvgrnMod(clip_in=fin, strength=[1,0], size=1.5)
+    fin = rksfunc.KrigBilateral(c420p16=fin)
+    fin = core.placebo.Shader(clip=fin, shader_s=cfl)
+    fin = core.placebo.Shader(clip=fin, shader_s=jointBilateral).resize.Spline36(format=vs.YUV420P16)
+    # fin = adptvgrnMod.adptvgrnMod(clip_in=body_part, strength=1)
     
     if configure.clean:
         cleanup()
