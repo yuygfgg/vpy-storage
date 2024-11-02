@@ -487,10 +487,15 @@ def p_body(clip):
     aaed1080P = aa(denoised1080P)
     merged1080P = core.std.MaskedMerge(dbed1080P,aaed1080P,nrmask,first_plane=True) # type: ignore
     dehalod = dehalo(merged1080P)
-
-    sharp = core.warp.AWarpSharp2(dehalod, thresh=128,blur=3,type=1,depth=[1, 0, 0],chroma=1,cplace="mpeg2", opt=True).placebo.Shader(shader_s=cfl).resize.Bicubic(format=vs.YUV420P16)
-        
-    return sharp
+    
+    dehalod.set_output(3)
+    
+    blur = haf.MinBlur(clp=dehalod, r=1)
+    sharp = core.warp.AWarpSharp2(blur, thresh=128,blur=3,type=1,depth=[1, 0, 0],chroma=1,cplace="mpeg2", opt=True)
+    line_mask = dehalo_mask_main(dehalod)
+    line_mask.set_output(4)
+    ret = core.std.MaskedMerge(dehalod, sharp, line_mask, first_plane=True).placebo.Shader(shader_s=cfl).resize.Spline36(format=vs.YUV420P16)
+    return ret
 
 def main():
 
