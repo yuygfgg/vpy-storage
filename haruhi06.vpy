@@ -400,25 +400,39 @@ def load_source(filepath):
     clip = core.resize.Spline36(clip=clip, width=configure.width, height=configure.height, format=vs.YUV420P16, matrix_s="709", matrix_in_s="709")
     return clip
 
-def dehalo_mask_light(clip: vs.VideoNode):
+def dehalo_mask_dark(clip: vs.VideoNode): # without dark protection
     luma = vsutil.get_y(clip)
     l_mask = haf.FineDehalo(luma, showmask=4)
-    mask_outer = l_mask.std.Maximum().std.Inflate()
-    mask_outer2 = core.std.Inflate(mask_outer)
-    mask_inner1 = vsutil.iterate(mask_outer, core.std.Minimum, 2)
-    mask_inner = core.akarin.Expr([mask_inner1, luma], "y 20000 < x 0 > and x 0 ?") # ((y < 20000) and (x > 0)) ? x : 0
+    mask_outer = l_mask.std.Maximum().std.Maximum().std.Inflate()
+    mask_outer2 = core.std.Maximum(mask_outer).std.Maximum().std.Inflate()
+    mask_inner1 = vsutil.iterate(mask_outer, core.std.Minimum, 4)
+    mask_inner = mask_inner1
     r_mask1 = core.akarin.Expr([mask_outer2, mask_inner], 'x y -')
-    r_mask = core.akarin.Expr([r_mask1, luma], "y 20000 < x 0 > and 0 x ?") # ((y < 20000) and (x > 0)) ? 0 : x
+    r_mask = r_mask1
     r_mask_highres = nnedi3_resample.nnedi3_resample(input=r_mask, target_width=clip.width*2, target_height=clip.height*2, mode="nnedi3cl")
     r_mask_min = core.std.Minimum(clip=r_mask_highres)
     r_mask_back = core.resize.Spline36(clip=r_mask_min, width=clip.width ,height=clip.height)
     return r_mask_back
 
+def dehalo_mask_small(clip: vs.VideoNode): # thinner
+    luma = vsutil.get_y(clip)
+    l_mask = haf.FineDehalo(luma, showmask=4)
+    mask_outer = l_mask.std.Maximum().std.Inflate()
+    mask_outer2 = core.std.Inflate(mask_outer)
+    mask_inner1 = vsutil.iterate(mask_outer, core.std.Minimum, 1)
+    mask_inner = mask_inner1
+    r_mask1 = core.akarin.Expr([mask_outer2, mask_inner], 'x y -')
+    r_mask = r_mask1
+    r_mask_highres = nnedi3_resample.nnedi3_resample(input=r_mask, target_width=clip.width*2, target_height=clip.height*2, mode="nnedi3cl")
+    r_mask_min = core.std.Minimum(clip=r_mask_highres)
+    r_mask_back = core.resize.Spline36(clip=r_mask_min, width=clip.width ,height=clip.height)
+    return r_mask
+
 def dehalo_mask_main(clip: vs.VideoNode):
     luma = vsutil.get_y(clip)
     l_mask = haf.FineDehalo(luma, showmask=4)
     mask_outer = l_mask.std.Maximum().std.Maximum().std.Inflate()
-    mask_outer2 = core.std.Inflate(mask_outer)
+    mask_outer2 = core.std.Maximum(mask_outer).std.Maximum().std.Inflate()
     mask_inner1 = vsutil.iterate(mask_outer, core.std.Minimum, 4)
     mask_inner = core.akarin.Expr([mask_inner1, luma], "y 20000 < x 0 > and x 0 ?") # ((y < 20000) and (x > 0)) ? x : 0
     r_mask1 = core.akarin.Expr([mask_outer2, mask_inner], 'x y -')
@@ -431,13 +445,16 @@ def dehalo_mask_main(clip: vs.VideoNode):
 def dehalo(clip):
     clipY = vsutil.get_y(clip)
     clipY720P = core.resize.Spline36(clip=clipY, width=1280, height=720, format=vs.GRAY16)
-    mask720 = dehalo_mask_main(clipY720P)
+    main_mask720 = dehalo_mask_main(clipY720P)
+    dark_mask720 = dehalo_mask_dark(clipY720P)
     dering1 = rksfunc.USMDering(cyuv16=clipY720P, mrad=1, mthr=75)
+    dering1 = core.std.MaskedMerge(clipY720P, dering1, dark_mask720, first_plane=True)  # type: ignore
     dering2 = haf.FineDehalo(src=dering1, contra=1, edgeproc=1, darkstr=0.5)
+    dering2 = core.std.MaskedMerge(clipY720P, dering2, dark_mask720, first_plane=True)
     dering3 = haf.DeHalo_alpha(clp=dering2, rx=1.4, ry=1.4, darkstr=0.5)
-    dering3 = core.std.MaskedMerge(clipY720P, dering3, mask720, first_plane=True)
+    dering3 = core.std.MaskedMerge(dering2, dering3, main_mask720, first_plane=True)
     dering4 = haf.EdgeCleaner(c=dering3, strength=10)
-    dering4 = core.std.MaskedMerge(clipY720P, dering4, mask720, first_plane=True)
+    dering4 = core.std.MaskedMerge(dering3, dering4, main_mask720, first_plane=True)
     backY = nnedi3_resample.nnedi3_resample(input=dering4, target_width=1920, target_height=1080, mode="nnedi3cl")
     ret = rksfunc.mergeuv(clipy=backY, clipuv=clip)
     return ret
@@ -507,7 +524,7 @@ def p_body(clip):
     
     blur = haf.MinBlur(clp=dehalod, r=1)
     blur = core.warp.AWarpSharp2(clip=blur, thresh=128, blur=3, type=1, depth=[1, 0, 0], chroma=1, cplace="mpeg2", opt=True)
-    line_mask = dehalo_mask_light(dehalod)
+    line_mask = dehalo_mask_small(dehalod)
     line_mask.set_output(4)
     ret = core.std.MaskedMerge(dehalod, blur, line_mask, first_plane=True).placebo.Shader(shader_s=cfl).resize.Spline36(format=vs.YUV420P16)
     ret.set_output(5)
