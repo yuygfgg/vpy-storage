@@ -372,18 +372,19 @@ vec4 hook() {
 }
 '''
 
+from kiwisolver import strength
 import vapoursynth as vs
 from vapoursynth import core
 import mvsfunc as mvf
 import havsfunc as haf
 import vsTAAmbk as taa
-import rksfunc, ksksfunc, vsmlrt, vsutil, adptvgrnMod, nnedi3_resample, Vine
+import rksfunc, ksksfunc, vsmlrt, vsutil, adptvgrnMod, nnedi3_resample, Vine, LimitedSharpen2
 
 class cfg:
 
     width = 0
     height = 0
-    episode = "01"
+    episode = "02"
     clean = False
 
 configure = cfg()
@@ -469,9 +470,9 @@ def deband(clip):
     return debanded
 
 def aa(clip):
-    aa_clip = taa.TAAmbk(clip, aatype=2, aatypeu=1, aatypev=1, preaa=-1, strength=0.45, cycle=1, mtype=3, mclip=None,
+    aa_clip = taa.TAAmbk(clip, aatype=2, aatypeu=1, aatypev=1, preaa=-1, strength=0.4, cycle=1, mtype=3, mclip=None,
            mthr=None, mthr2=None, mlthresh=None, mpand=(1, 0), txtmask=0, txtfade=0, thin=1, dark=0.0, sharp=-1,
-           aarepair=0, postaa=None, src=None, stabilize=3, down8=False, showmask=0, opencl=True)
+           aarepair=0, postaa=None, src=None, stabilize=1, down8=False, showmask=0, opencl=True)
     return aa_clip
 
 def aa_oped(clip):
@@ -482,20 +483,17 @@ def aa_oped(clip):
 
 def chroma_aa(clip: vs.VideoNode) -> vs.VideoNode: 
     configure.clean = True
-    clip = core.placebo.Shader(clip=clip, shader_s=jointBilateral).resize.Bicubic(format=vs.YUV420P16)
-    clip = core.placebo.Shader(clip=clip, shader_s=cfl).resize.Bicubic(format=vs.YUV420P16)
     half = rksfunc.half444(clip)
     y, u, v = vsutil.split(half)
     v_stab = haf.QTGMC(v, InputType=1, SourceMatch=3, Sharpness=0, opencl=True)
     v_stab = haf.QTGMC(v_stab.std.Transpose(), InputType=1, SourceMatch=3, Sharpness=0, opencl=True).std.Transpose()
     u_stab = haf.QTGMC(u, InputType=1, SourceMatch=3, Sharpness=0, opencl=True)
     u_stab = haf.QTGMC(u_stab.std.Transpose(), InputType=1, SourceMatch=3, Sharpness=0, opencl=True).std.Transpose()
-    half_stab = vsutil.join([y, u_stab, v_stab]).placebo.Shader(shader_s=cfl).resize.Bicubic(format=vs.YUV444P16)
+    half_stab = vsutil.join([y, u_stab, v_stab])
     half_w2x = rksfunc.w2xtrt(half_stab, 3, ofmt=True)
     ret = rksfunc.mergeuv(clip, half_w2x.resize.Bicubic(format=vs.YUV444P16))
-    ret = core.placebo.Shader(clip=ret, shader_s=cfl).resize.Bicubic(format=vs.YUV420P16)
     line_mask = taa.TAAmbk(clip=clip, aatype=1, aatypeu=0, aatypev=0, opencl=True, showmask=1, mthr=56, strength=0).std.Maximum()
-    merge = core.std.MaskedMerge(clip, ret, line_mask, first_plane=True).placebo.Shader(shader_s=cfl).resize.Bicubic(format=vs.YUV420P16)
+    merge = core.std.MaskedMerge(clip, ret, line_mask, first_plane=True).placebo.Shader(shader_s=cfl).resize.Spline36(format=vs.YUV420P16)
     return merge
 
 def cleanup():
@@ -528,30 +526,33 @@ def p_body(clip):
     blur = haf.MinBlur(clp=dehalod, r=1)
     blur.set_output(5)
     # dark = mvf.LimitFilter(flt=blur, src=merged1080P, brighten_thr=)
-    line_mask = dehalo_mask_small(dehalod)
+    around_line_mask = dehalo_mask_small(dehalod)
     # line_mask.set_output(4)
-    ret = core.std.MaskedMerge(dehalod, blur, line_mask, first_plane=True)
+    ret = core.std.MaskedMerge(dehalod, blur, around_line_mask, first_plane=True)
     # ret.set_output(5)
     # sharp = core.warp.AWarpSharp2(ret, thresh=128, blur=3, type=1, depth=[1, 1, 1], chroma=1, cplace="mpeg2", opt=True)
     # dark = haf.FastLineDarkenMOD(c=sharp)
     dark = core.akarin.Expr(clips=[ret,merged1080P], expr="x y > y x ?")
-    dark = core.akarin.Expr(clips=[dark,merged_YUV], expr="x y > y x ?")
-    dark = haf.FastLineDarkenMOD(c=dark, protection=35)
     # dark = mvf.LimitFilter(flt=ret, src=merged1080P, brighten_thr=0.01)
-    return dark
+    clean = haf.EdgeCleaner(c=dark)
+    # sharp = LimitedSharpen2.LimitedSharpen2(clp=clean, strength=50, edgemode=1)
+    line_mask = taa.TAAmbk(clip=clean, aatype=1, aatypeu=0, aatypev=0, opencl=True, showmask=1, mthr=56, strength=0).std.Inflate()
+    sharp = core.cas.CAS(clip=clean, sharpness=0.25, planes=[0,1,2])
+    sharp = core.std.MaskedMerge(clean, sharp, line_mask, first_plane=True)
+    return sharp
 
 def main():
 
     eg = core.lsmas.LWLibavSource(f'/Volumes/untitled/S01E{configure.episode}_vcb.mkv')
-    src16 = load_source(f'/Volumes/untitled/S01E{configure.episode}.mkv').std.Trim(first=24)
+    src16 = load_source(f'/Volumes/untitled/S01E{configure.episode}.mkv')
     # src16 = load_source('/Users/a1/00000.m2ts')
     body_part = p_body(src16)
     oped = p_oped(src16)
 
-    op = oped.std.Trim(first=3592, last=5755)
-    ed = oped.std.Trim(first=33976)
-    before_op = body_part.std.Trim(first=0, last=3591)
-    body = body_part.std.Trim(first=5756, last=33975)
+    op = oped.std.Trim(first=2682, last=4844)
+    ed = oped.std.Trim(first=32120)
+    before_op = body_part.std.Trim(first=0, last=2681)
+    body = body_part.std.Trim(first=4845, last=32119)
     fin = before_op + op + body + ed
     
     fin = adptvgrnMod.adptvgrnMod(clip_in=fin, strength=[1,0], size=1.5)
