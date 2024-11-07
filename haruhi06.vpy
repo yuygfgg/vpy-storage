@@ -372,13 +372,12 @@ vec4 hook() {
 }
 '''
 
-from kiwisolver import strength
 import vapoursynth as vs
 from vapoursynth import core
 import mvsfunc as mvf
 import havsfunc as haf
 import vsTAAmbk as taa
-import rksfunc, ksksfunc, vsmlrt, vsutil, adptvgrnMod, nnedi3_resample, Vine, LimitedSharpen2
+import rksfunc, ksksfunc, vsmlrt, vsutil, adptvgrnMod, nnedi3_resample, Vine, LimitedSharpen2, CSMOD
 
 class cfg:
 
@@ -420,10 +419,10 @@ def dehalo_mask_small(clip: vs.VideoNode): # thinner
     l_mask = haf.FineDehalo(luma, showmask=4)
     mask_outer = l_mask.std.Maximum().std.Inflate()
     mask_outer2 = core.std.Inflate(mask_outer)
-    mask_inner1 = vsutil.iterate(mask_outer, core.std.Minimum, 2)
-    mask_inner = mask_inner1
+    mask_inner1 = vsutil.iterate(mask_outer, core.std.Minimum, 3)
+    mask_inner = core.akarin.Expr([mask_inner1, luma], "y 20000 < x 0 > and x 0 ?")
     r_mask1 = core.akarin.Expr([mask_outer2, mask_inner], 'x y -')
-    r_mask = r_mask1
+    r_mask = core.akarin.Expr([r_mask1, luma], "y 20000 < x 0 > and 0 x ?")
     return r_mask
 
 def dehalo_mask_main(clip: vs.VideoNode):
@@ -456,7 +455,7 @@ def dehalo(clip):
     # dering3.set_output(8)
     dering4 = haf.EdgeCleaner(c=dering2, strength=10)
     dering4 = core.std.MaskedMerge(dering2, dering4, main_mask720, first_plane=True)
-    dering4.set_output(9)
+    dering4.set_output(8)
     backY = nnedi3_resample.nnedi3_resample(input=dering4, target_width=1920, target_height=1080, mode="nnedi3cl")
     ret = rksfunc.mergeuv(clipy=backY, clipuv=clip)
     return ret
@@ -496,6 +495,15 @@ def chroma_aa(clip: vs.VideoNode) -> vs.VideoNode:
     merge = core.std.MaskedMerge(clip, ret, line_mask, first_plane=True).placebo.Shader(shader_s=cfl).resize.Spline36(format=vs.YUV420P16)
     return merge
 
+def smooth_line(clip):
+    blur = haf.MinBlur(clp=clip, r=1)
+    around_line_mask = dehalo_mask_small(clip)
+    ret = core.std.MaskedMerge(clip, blur, around_line_mask, first_plane=True)
+    return keep_darker(clip, ret)
+
+def keep_darker(clipa, clipb): 
+    return core.akarin.Expr(clips=[clipa,clipb], expr="x y > y x ?")
+
 def cleanup():
     print("Cleaning onnx coreml cache...")
     import subprocess; subprocess.run('rm -r /private/var/folders/gb/m6gky8t10yx68drv06ncbj_h0000gn/T/onnxruntime*', shell=True, check=True)
@@ -522,24 +530,24 @@ def p_body(clip):
     dehalod = dehalo(merged1080P)
     
     dehalod.set_output(4)
-    
-    blur = haf.MinBlur(clp=dehalod, r=1)
-    blur.set_output(5)
-    # dark = mvf.LimitFilter(flt=blur, src=merged1080P, brighten_thr=)
     around_line_mask = dehalo_mask_small(dehalod)
+    around_line_mask.set_output(5)
     # line_mask.set_output(4)
-    ret = core.std.MaskedMerge(dehalod, blur, around_line_mask, first_plane=True)
+    smoothed = smooth_line(dehalod)
     # ret.set_output(5)
     # sharp = core.warp.AWarpSharp2(ret, thresh=128, blur=3, type=1, depth=[1, 1, 1], chroma=1, cplace="mpeg2", opt=True)
     # dark = haf.FastLineDarkenMOD(c=sharp)
-    dark = core.akarin.Expr(clips=[ret,merged1080P], expr="x y > y x ?")
+    dark =keep_darker(smoothed,merged1080P)
     # dark = mvf.LimitFilter(flt=ret, src=merged1080P, brighten_thr=0.01)
     clean = haf.EdgeCleaner(c=dark)
+    clean.set_output(9)
     # sharp = LimitedSharpen2.LimitedSharpen2(clp=clean, strength=50, edgemode=1)
     line_mask = taa.TAAmbk(clip=clean, aatype=1, aatypeu=0, aatypev=0, opencl=True, showmask=1, mthr=56, strength=0).std.Inflate()
-    sharp = core.cas.CAS(clip=clean, sharpness=0.25, planes=[0,1,2])
-    sharp = core.std.MaskedMerge(clean, sharp, line_mask, first_plane=True)
-    return sharp
+    # sharp = core.cas.CAS(clip=clean, sharpness=0.1, opt=2)
+    # sharp = core.std.MaskedMerge(clean, sharp, line_mask, first_plane=True)
+    sharp = CSMOD.CSMOD(clean, preset='detail', ss_hq=1)
+    finn = smooth_line(sharp)
+    return finn
 
 def main():
 
@@ -556,9 +564,7 @@ def main():
     fin = before_op + op + body + ed
     
     fin = adptvgrnMod.adptvgrnMod(clip_in=fin, strength=[1,0], size=1.5)
-    fin = rksfunc.KrigBilateral(c420p16=fin)
-    fin = core.placebo.Shader(clip=fin, shader_s=cfl)
-    fin = core.placebo.Shader(clip=fin, shader_s=jointBilateral).resize.Spline36(format=vs.YUV420P16)
+    fin = rksfunc.KrigBilateral(c420p16=fin).resize.Spline36(format=vs.YUV420P16)
     # fin = adptvgrnMod.adptvgrnMod(clip_in=body_part, strength=1)
     
     if configure.clean:
