@@ -573,6 +573,16 @@ def aa(clip):
     ret = rksfunc.mergeuv(aaY, clip)
     return ret
 
+def stablize(clip):
+    superclip = core.mv.Super(clip, pel=2, sharp=1)
+    bv = core.mv.Analyse(superclip, isb=True, delta=1, overlap=4, blksize=8, search=3)
+    fv = core.mv.Analyse(superclip, isb=False, delta=1, overlap=4, blksize=8, search=3)
+    compensated_forward = core.mv.Flow(clip, superclip, fv)
+    compensated_backward = core.mv.Flow(clip, superclip, bv)
+    temporal_smooth = core.std.Merge(compensated_forward, compensated_backward, weight=0.5)
+    final_clip = core.std.Merge(clip, temporal_smooth, weight=0.6)
+    return final_clip
+
 def output(output_list):
     for index, clip in enumerate(output_list):
         clip.set_output(index)
@@ -607,7 +617,7 @@ aaedY1080P = core.std.MaskedMerge(clipa=aaedY1080P, clipb=rescaled.resize.Spline
 dbed1080P = rksfunc.SynDeband(cyuv16=aaedY1080P, limit=True, limit_elast=1.75)
 merged1080P = core.std.MaskedMerge(dbed1080P,aaedY1080P,nrmask,first_plane=True) # type: ignore
 merged1080P.set_output(3)
-mask = muvsfunc.AnimeMask(input=merged1080P, shift=0.7, mode=1).std.Binarize(10)
+mask = muvsfunc.AnimeMask(input=merged1080P, shift=0.7, mode=1).std.Binarize(1)
 mask = core.akarin.Expr([mask.fmtc.bitdepth(bits=16), vsutil.get_y(cmask).fmtc.bitdepth(bits=16)], "x y -").std.Binarize(threshold=10000)
 mask.set_output(4)
 dehalod = haf.FineDehalo(merged1080P, edgeproc=1, contra=1)
@@ -615,8 +625,9 @@ dehalod = core.std.MaskedMerge(clipa=merged1080P, clipb=dehalod, mask=mask, firs
 # dehalod = haf.EdgeCleaner(dehalod)
 # dehalod = haf.EdgeCleaner(c=dehalod, strength=15)
 dehalod.set_output(5)
-
-finn = src.std.Trim(last=2433).resize.Spline36(format=vs.YUV420P16) + dehalod.std.Trim(first=2434) if "00003" in file_path else dehalod
+stable = stablize(dehalod)
+stable.set_output(6)
+finn = src.std.Trim(last=2433).resize.Spline36(format=vs.YUV420P16) + dehalod.std.Trim(first=2434, last=14441) + stable.std.Trim(first=14442, last=14521) + dehalod.std.Trim(first=14522)
 
 finn.set_output(0)
 
