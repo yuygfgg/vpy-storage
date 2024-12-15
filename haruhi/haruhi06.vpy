@@ -90,9 +90,9 @@ def deband(clip):
     return debanded
 
 def aa(clip):
-    aa_clip = taa.TAAmbk(clip, aatype=2, aatypeu=1, aatypev=1, preaa=-1, strength=0.4, cycle=1, mtype=3, mclip=None,
+    aa_clip = taa.TAAmbk(clip, aatype=-2, aatypeu=1, aatypev=1, preaa=-1, strength=0.6, cycle=0, mtype=3, mclip=None,
            mthr=None, mthr2=None, mlthresh=None, mpand=(1, 0), txtmask=0, txtfade=0, thin=1, dark=0.0, sharp=-0.25,
-           aarepair=0, postaa=None, src=None, stabilize=1, down8=False, showmask=0, opencl=True)
+           aarepair=2, postaa=None, src=None, stabilize=1, down8=False, showmask=0, opencl=True)
     return aa_clip
 
 def aa_oped(clip):
@@ -133,7 +133,7 @@ def smooth_line(clip):
     return keep_darker(ret, clip)
 
 def keep_darker(clipa, clipb): 
-    return core.akarin.Expr(clips=[clipa,clipb], expr=["x y > y x ?", "x", "x"])
+    return core.akarin.Expr(clips=[clipa,clipb], expr=["x y min", "x", "x"])
 
 def cleanup():
     print("Cleaning onnx coreml cache...")
