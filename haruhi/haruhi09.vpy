@@ -49,8 +49,8 @@ src_fft = core.fftspectrum.FFTSpectrum(clip=mvf.Depth(srcorg,8), grid=True)
 
 srcorg = mvf.Depth(srcorg,32)
 
-rescaled1, cmask1, osd1 = y5gfunc.rescale(clip=srcorg, src_height=y5gfunc.ranger(714.5, 715, 0.025)+[713, 714, 716, 717], bw=[1920], bh=[1080], descale_kernel=["Debicubic"], b=[1/3], c=[1/3], show_mask=True, fft=False) # type: ignore
-rescaled2, cmask2, osd2 = y5gfunc.rescale(clip=srcorg, src_height=y5gfunc.ranger(955, 957,0.05)+[953, 954, 958, 959], bw=[1920], bh=[1080], descale_kernel=["Delanczos"], taps=2, show_mask=True, fft=False) # type: ignore
+rescaled1, cmask1, osd1 = y5gfunc.rescale(clip=srcorg, src_height=y5gfunc.ranger(714, 715, 0.1)+[713, 714, 716, 717, 718, 719], bw=[1920], bh=[1080], descale_kernel=["Debicubic"], b=[1/3], c=[1/3], show_detail_mask=True, show_fft=False) # type: ignore
+rescaled2, cmask2, osd2 = y5gfunc.rescale(clip=srcorg, src_height=y5gfunc.ranger(955, 957,0.1)+[953, 954, 958, 959], bw=[1920], bh=[1080], descale_kernel=["Delanczos"], taps=2, show_detail_mask=True, show_fft=False) # type: ignore
 
 select_expr = "src0.MaxDelta src0.Descaled * src1.MaxDelta src1.Descaled * argmax2"
 
