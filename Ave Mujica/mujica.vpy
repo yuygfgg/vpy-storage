@@ -21,7 +21,7 @@ configure = cfg()
 
 
 def load_source(filepath):
-    clip = core.lsmas.LWLibavSource(filepath)
+    clip = core.bs.VideoSource(filepath)
     if configure.width == 0 or configure.height == 0:
         configure.width = clip.width
         configure.height = clip.height
@@ -48,7 +48,7 @@ def source_choose(cr: vs.VideoNode, amzn: vs.VideoNode, debug=False) -> vs.Video
 cr = load_source(filepath='/Users/a1/Downloads/mujica01_cr.mkv')
 amzn = load_source(filepath='/Users/a1/Downloads/mujica01_amzn.mkv')
 
-src = source_choose(cr, amzn, debug=False)
+src = source_choose(cr, amzn, debug=True)
 
 src = mvf.Depth(src, 32)
 
