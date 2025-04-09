@@ -3,6 +3,8 @@ from vstools import core, vs
 import vstools
 import subprocess
 import CSMOD
+import havsfunc as haf
+import zvs
 from y5gfunc import *  # type: ignore
 
 episode_num = "01"
@@ -28,16 +30,19 @@ chi_path = f"{episodedir_path}chi.mkv"
 src = load_source(src_path)
 
 rescaled, upscaled, cmask, osd = rescale(src, ["Debicubic"], src_height=900, bw=1920, bh=1080, b=[-0.5, -0.33, 0], c=[1], show_upscaled=True, show_detail_mask=True, scene_stable=True)  # type: ignore
+rescaled = rescaled.resize2.Bicubic(format=vs.YUV420P16)
+
 denoised = Fast_BM3DWrapper(
-    rescaled.resize2.Bicubic(format=vs.YUV420P16), sigma_Y=2, sigma_chroma=2.5
+    rescaled, sigma_Y=2, sigma_chroma=2.5
 )
 
 debanded, nrmask = SynDeband(clip=denoised, limit=True, include_mask=True)
 merged = core.std.MaskedMerge(debanded, denoised, nrmask, first_plane=True)  # type: ignore
 
 sharp = CSMOD.CSMOD(merged, preset="detail")
+sharp2 = haf.FastLineDarkenMOD(sharp, strength=25)
 
-filtered = vstools.depth(sharp, 10)
+filtered = vstools.depth(sharp2, 10)
 # ------ filter chain end
 
 chs = core.assrender.TextSub(filtered, chs_raw_path, fontdir=fontdir)
